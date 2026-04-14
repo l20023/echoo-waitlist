@@ -1,5 +1,12 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { HashRouter, Link, Route, Routes, useSearchParams } from "react-router-dom";
+import {
+  HashRouter,
+  Link,
+  Route,
+  Routes,
+  useNavigate,
+  useSearchParams,
+} from "react-router-dom";
 import "./App.css";
 import { supabase } from "./supabase";
 import { track, setAnalyticsConsentWeb } from "./analytics";
@@ -42,6 +49,7 @@ function App() {
       <Routes>
         <Route path="/" element={<LandingPage />} />
         <Route path="/confirm" element={<ConfirmWaitlistPage />} />
+        <Route path="/confirmed" element={<ConfirmedPage />} />
         <Route
           path="/feature-requests"
           element={<FeatureRequestsPage supabase={supabase} source="waitlist" backTo="/" />}
@@ -276,6 +284,7 @@ function LandingPage() {
 
 function ConfirmWaitlistPage() {
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   const token = searchParams.get("token");
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState(
@@ -302,6 +311,7 @@ function ConfirmWaitlistPage() {
         const row = data[0];
         setPosition(row.waitlist_position ?? null);
         setMessage("Your email is confirmed. Welcome to the waitlist.");
+        navigate("/confirmed", { replace: true });
       } catch {
         setMessage("Could not confirm right now. Please try again.");
       } finally {
@@ -344,6 +354,21 @@ function ConfirmWaitlistPage() {
             <Link to="/" className="feature-request-link">
               Back to waitlist
             </Link>
+          </section>
+        </section>
+      </main>
+    </div>
+  );
+}
+
+function ConfirmedPage() {
+  return (
+    <div className="app-container">
+      <main className="landing">
+        <section className="content content-hero">
+          <section className="hero-text">
+            <h2>Email Confirmed</h2>
+            <p>Your email address has been confirmed. You can close this window.</p>
           </section>
         </section>
       </main>
