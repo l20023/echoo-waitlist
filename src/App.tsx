@@ -280,6 +280,8 @@ function LandingPage() {
     if (!confirmationEmail || resendLoading || resendCooldownSeconds > 0) return;
     setResendLoading(true);
     setResendMessage("");
+    setResendCooldown(confirmationEmail, RESEND_COOLDOWN_SECONDS);
+    setResendCooldownSeconds(RESEND_COOLDOWN_SECONDS);
     try {
       await requestConfirmationEmail(confirmationEmail);
       setResendMessage("Confirmation email sent.");
@@ -360,6 +362,7 @@ function LandingPage() {
                     type="button"
                     onClick={handleResend}
                     disabled={resendLoading || resendCooldownSeconds > 0}
+                    className="resend-text-link"
                   >
                     {resendLoading
                       ? "Sending..."
