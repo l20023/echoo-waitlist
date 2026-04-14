@@ -12,6 +12,52 @@ import { supabase } from "./supabase";
 import { track, setAnalyticsConsentWeb } from "./analytics";
 import { FeatureRequestsPage } from "./modules/feature-requests";
 
+const RESEND_COOLDOWN_SECONDS = 60;
+const RESEND_STORAGE_PREFIX = "echoo_waitlist_resend_next_at:";
+
+function getResendStorageKey(email: string): string {
+  return `${RESEND_STORAGE_PREFIX}${email}`;
+}
+
+function setResendCooldown(email: string, cooldownSeconds: number): void {
+  if (typeof window === "undefined") return;
+  const nextAllowedAtMs = Date.now() + cooldownSeconds * 1000;
+  window.localStorage.setItem(getResendStorageKey(email), String(nextAllowedAtMs));
+}
+
+function getRemainingResendSeconds(email: string): number {
+  if (typeof window === "undefined") return 0;
+  const stored = window.localStorage.getItem(getResendStorageKey(email));
+  if (!stored) return 0;
+  const nextAllowedAtMs = Number.parseInt(stored, 10);
+  if (!Number.isFinite(nextAllowedAtMs)) return 0;
+  return Math.max(0, Math.ceil((nextAllowedAtMs - Date.now()) / 1000));
+}
+
+function extractConfirmationToken(): string | null {
+  if (typeof window === "undefined") return null;
+
+  const sanitizeToken = (raw: string | null): string | null => {
+    if (!raw) return null;
+    const decoded = decodeURIComponent(raw).trim();
+    const trimmed = decoded.replace(/^[^a-zA-Z0-9]+|[^a-zA-Z0-9]+$/g, "");
+    const normalized = trimmed.replace(/[^a-zA-Z0-9]/g, "");
+    return normalized.length > 0 ? normalized : null;
+  };
+
+  const fromSearch = sanitizeToken(new URLSearchParams(window.location.search).get("token"));
+  if (fromSearch) return fromSearch;
+
+  const hash = window.location.hash ?? "";
+  const questionMarkIndex = hash.indexOf("?");
+  if (questionMarkIndex !== -1) {
+    const hashQuery = hash.slice(questionMarkIndex + 1);
+    return sanitizeToken(new URLSearchParams(hashQuery).get("token"));
+  }
+
+  return null;
+}
+
 const featureSections = [
   {
     title: "Journal just by sending a memo to yourself.",
@@ -66,6 +112,10 @@ function LandingPage() {
   const [needsConfirmation, setNeedsConfirmation] = useState(false);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState(""); // Für Feedback-Texte
+  const [confirmationEmail, setConfirmationEmail] = useState<string | null>(null);
+  const [resendCooldownSeconds, setResendCooldownSeconds] = useState(0);
+  const [resendLoading, setResendLoading] = useState(false);
+  const [resendMessage, setResendMessage] = useState("");
   const [consent, setConsent] = useState<boolean | null>(() => {
     if (typeof window === "undefined") return null;
     try {
@@ -112,6 +162,41 @@ function LandingPage() {
       referrer: document.referrer || undefined,
     });
   }, [consent]);
+
+  useEffect(() => {
+    if (!confirmationEmail) return;
+
+    const syncRemaining = () => {
+      setResendCooldownSeconds(getRemainingResendSeconds(confirmationEmail));
+    };
+
+    syncRemaining();
+    const intervalId = window.setInterval(syncRemaining, 1000);
+    return () => window.clearInterval(intervalId);
+  }, [confirmationEmail]);
+
+  const requestConfirmationEmail = async (targetEmail: string) => {
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+    const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+    if (!supabaseUrl || !supabaseAnonKey) return;
+
+    const response = await fetch(`${supabaseUrl}/functions/v1/waitlist-send-confirmation`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        apikey: supabaseAnonKey,
+        Authorization: `Bearer ${supabaseAnonKey}`,
+      },
+      body: JSON.stringify({ email: targetEmail }),
+    });
+
+    if (!response.ok) {
+      throw new Error("Could not send confirmation email right now.");
+    }
+
+    setResendCooldown(targetEmail, RESEND_COOLDOWN_SECONDS);
+    setResendCooldownSeconds(RESEND_COOLDOWN_SECONDS);
+  };
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -174,29 +259,35 @@ function LandingPage() {
       setSubmitted(true);
       setWaitlistPosition(row.waitlist_position ?? null);
       setNeedsConfirmation(!!row.needs_confirmation);
+      setConfirmationEmail(normalizedEmail);
+      setResendMessage("");
       track("waitlist_signup_confirmed", {
         email_domain: email.split("@")[1] || undefined,
         waitlist_position: row.waitlist_position ?? undefined,
       });
 
       // Trigger transactional confirmation mail (best-effort).
-      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-      const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-      if (supabaseUrl && supabaseAnonKey) {
-        fetch(`${supabaseUrl}/functions/v1/waitlist-send-confirmation`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            apikey: supabaseAnonKey,
-            Authorization: `Bearer ${supabaseAnonKey}`,
-          },
-          body: JSON.stringify({ email }),
-        }).catch((mailErr) => {
+      if (row.needs_confirmation) {
+        requestConfirmationEmail(normalizedEmail).catch((mailErr) => {
           console.error("Waitlist confirmation mail trigger failed:", mailErr);
         });
       }
     }
     setLoading(false);
+  };
+
+  const handleResend = async () => {
+    if (!confirmationEmail || resendLoading || resendCooldownSeconds > 0) return;
+    setResendLoading(true);
+    setResendMessage("");
+    try {
+      await requestConfirmationEmail(confirmationEmail);
+      setResendMessage("Confirmation email sent.");
+    } catch {
+      setResendMessage("Could not send confirmation email right now. Please try again.");
+    } finally {
+      setResendLoading(false);
+    }
   };
 
   return (
@@ -263,6 +354,22 @@ function LandingPage() {
                   ? "Please confirm your email. We sent you a confirmation message."
                   : "You are confirmed on the waitlist."}
               </p>
+              {needsConfirmation ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={handleResend}
+                    disabled={resendLoading || resendCooldownSeconds > 0}
+                  >
+                    {resendLoading
+                      ? "Sending..."
+                      : resendCooldownSeconds > 0
+                        ? `Resend available in ${resendCooldownSeconds}s`
+                        : "Resend confirmation email"}
+                  </button>
+                  {resendMessage ? <p className="status-message">{resendMessage}</p> : null}
+                </>
+              ) : null}
               {!needsConfirmation && waitlistPosition ? (
                 <p className="waitlist-position">
                   Your current waitlist position: <strong>#{waitlistPosition}</strong>
@@ -301,9 +408,8 @@ function LandingPage() {
 }
 
 function ConfirmWaitlistPage() {
-  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const token = searchParams.get("token");
+  const token = extractConfirmationToken();
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState(
     token
