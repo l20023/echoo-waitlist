@@ -291,6 +291,21 @@ body {
   font-size: 0.98rem;
 }
 
+.resend-text-link {
+  border: none;
+  background: none;
+  color: inherit;
+  text-decoration: underline;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+.resend-text-link:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
 .feedback-block h3 {
   margin: 0;
   font-size: clamp(1.1rem, 2.2vw, 1.35rem);
