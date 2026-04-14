@@ -135,11 +135,25 @@ function LandingPage() {
       referrer: document.referrer || undefined,
     });
 
-    const { data, error } = await supabase.rpc("join_waitlist", { p_email: email });
+    const normalizedEmail = email.trim().toLowerCase();
+    const { data, error } = await supabase.rpc("join_waitlist", {
+      p_email: normalizedEmail,
+    });
 
     const row = Array.isArray(data) ? data[0] : null;
 
     if (error || !row) {
+      const rpcMissing =
+        error?.code === "PGRST202" ||
+        /join_waitlist/i.test(error?.message ?? "") ||
+        /function.*does not exist/i.test(error?.message ?? "");
+
+      if (rpcMissing) {
+        setMessage("Backend migration missing: please deploy the waitlist confirmation RPCs.");
+        setLoading(false);
+        return;
+      }
+
       // Prüfen, ob die Email bereits existiert (PostgREST error code 23505)
       if (error?.code === "23505") {
         setMessage("You're already on the list! ✨");
@@ -147,7 +161,11 @@ function LandingPage() {
           email_domain: email.split("@")[1] || undefined,
         });
       } else {
-        setMessage("Something went wrong. Please try again.");
+        setMessage(
+          error?.message
+            ? `Could not join waitlist: ${error.message}`
+            : "Something went wrong. Please try again.",
+        );
         track("waitlist_signup_error", {
           code: error?.code,
         });
@@ -245,7 +263,7 @@ function LandingPage() {
                   ? "Please confirm your email. We sent you a confirmation message."
                   : "You are confirmed on the waitlist."}
               </p>
-              {waitlistPosition ? (
+              {!needsConfirmation && waitlistPosition ? (
                 <p className="waitlist-position">
                   Your current waitlist position: <strong>#{waitlistPosition}</strong>
                 </p>
@@ -311,7 +329,11 @@ function ConfirmWaitlistPage() {
         const row = data[0];
         setPosition(row.waitlist_position ?? null);
         setMessage("Your email is confirmed. Welcome to the waitlist.");
-        navigate("/confirmed", { replace: true });
+        const positionParam =
+          row.waitlist_position !== null && row.waitlist_position !== undefined
+            ? `?position=${encodeURIComponent(String(row.waitlist_position))}`
+            : "";
+        navigate(`/confirmed${positionParam}`, { replace: true });
       } catch {
         setMessage("Could not confirm right now. Please try again.");
       } finally {
@@ -362,13 +384,28 @@ function ConfirmWaitlistPage() {
 }
 
 function ConfirmedPage() {
+  const [searchParams] = useSearchParams();
+  const positionParam = searchParams.get("position");
+  const waitlistPosition =
+    positionParam && /^\d+$/.test(positionParam)
+      ? Number.parseInt(positionParam, 10)
+      : null;
+
   return (
     <div className="app-container">
       <main className="landing">
         <section className="content content-hero">
           <section className="hero-text">
-            <h2>Email Confirmed</h2>
-            <p>Your email address has been confirmed. You can close this window.</p>
+            <h2>Congrats! You are on the waitlist.</h2>
+            <p>
+              You will be notified when Echoo is available.
+              {waitlistPosition
+                ? ` You are currently place #${waitlistPosition} in the waitlist.`
+                : ""}
+            </p>
+            <Link to="/feature-requests" className="feature-request-link">
+              Add feedback
+            </Link>
           </section>
         </section>
       </main>
