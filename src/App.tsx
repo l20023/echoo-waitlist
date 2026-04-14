@@ -304,50 +304,44 @@ function ConfirmWaitlistPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const token = searchParams.get("token");
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState(
-    token ? "Confirming your waitlist email..." : "Missing confirmation token.",
+    token
+      ? "Click below to confirm your waitlist email."
+      : "Missing confirmation token.",
   );
   const [position, setPosition] = useState<number | null>(null);
+  const [confirmed, setConfirmed] = useState(false);
 
-  useEffect(() => {
-    if (!token) {
-      setLoading(false);
-      return;
-    }
-
-    const confirm = async () => {
+  const handleConfirm = async () => {
+    if (!token || loading || confirmed) return;
+    setLoading(true);
+    setMessage("Confirming your waitlist email...");
+    try {
       const { data, error } = await supabase.rpc("confirm_waitlist_email", {
         p_token: token,
       });
-      try {
-        if (error || !data || data.length === 0) {
-          setMessage("Confirmation link is invalid or expired.");
-          return;
-        }
 
-        const row = data[0];
-        setPosition(row.waitlist_position ?? null);
-        setMessage("Your email is confirmed. Welcome to the waitlist.");
-        const positionParam =
-          row.waitlist_position !== null && row.waitlist_position !== undefined
-            ? `?position=${encodeURIComponent(String(row.waitlist_position))}`
-            : "";
-        navigate(`/confirmed${positionParam}`, { replace: true });
-      } catch {
-        setMessage("Could not confirm right now. Please try again.");
-      } finally {
-        setLoading(false);
+      if (error || !data || data.length === 0) {
+        setMessage("Confirmation link is invalid or expired.");
+        return;
       }
-    };
 
-    window.setTimeout(() => {
-      confirm().catch(() => {
-        setMessage("Could not confirm right now. Please try again.");
-        setLoading(false);
-      });
-    }, 0);
-  }, [token]);
+      const row = data[0];
+      setConfirmed(true);
+      setPosition(row.waitlist_position ?? null);
+      setMessage("Your email is confirmed. Welcome to the waitlist.");
+      const positionParam =
+        row.waitlist_position !== null && row.waitlist_position !== undefined
+          ? `?position=${encodeURIComponent(String(row.waitlist_position))}`
+          : "";
+      navigate(`/confirmed${positionParam}`, { replace: true });
+    } catch {
+      setMessage("Could not confirm right now. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <div className="app-container">
@@ -368,6 +362,11 @@ function ConfirmWaitlistPage() {
           <section className="hero-text">
             <h2>Email confirmation</h2>
             <p>{message}</p>
+            {token ? (
+              <button type="button" onClick={handleConfirm} disabled={loading || confirmed}>
+                {loading ? "Confirming..." : "Confirm email now"}
+              </button>
+            ) : null}
             {!loading && position ? (
               <p className="waitlist-position">
                 Your current waitlist position: <strong>#{position}</strong>
